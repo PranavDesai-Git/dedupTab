@@ -218,6 +218,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         pendingNewTabs.delete(tabId);
 
         const sourceTabId = tab.openerTabId || null;
+        const isBackgroundOpen = !tab.active;
 
         try {
             await chrome.tabs.remove(tabId);
@@ -225,13 +226,34 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
             // Tab may have already been closed
         }
 
-        await chrome.tabs.update(match.id, { active: true });
-        await chrome.windows.update(match.windowId, { focused: true });
+        if (isBackgroundOpen && sourceTabId) {
+            try {
+                const opener = await chrome.tabs.get(sourceTabId);
+                if (opener) {
+                    await chrome.tabs.move(match.id, {
+                        windowId: opener.windowId,
+                        index: opener.index + 1
+                    });
 
-        chrome.tabs.sendMessage(match.id, {
-            type: "SHOW_REDIRECT_NOTICE",
-            canJumpBack: Boolean(sourceTabId)
-        }).catch(() => {});
+                    chrome.tabs.sendMessage(opener.id, {
+                        type: "SHOW_REDIRECT_NOTICE",
+                        canJumpBack: false,
+                        text: "Already open - pulled tab next to you"
+                    }).catch(() => {});
+                }
+            } catch {
+                // Opener tab may have closed
+            }
+        } else {
+            await chrome.tabs.update(match.id, { active: true });
+            await chrome.windows.update(match.windowId, { focused: true });
+
+            chrome.tabs.sendMessage(match.id, {
+                type: "SHOW_REDIRECT_NOTICE",
+                canJumpBack: Boolean(sourceTabId),
+                text: "Tab already open, redirected"
+            }).catch(() => {});
+        }
 
         chrome.storage.local.get({ savedCount: 0 }, (data) => {
             chrome.storage.local.set({ savedCount: data.savedCount + 1 });
