@@ -1,0 +1,12 @@
+# System
+.DS_Store
+Thumbs.db
+
+# Logs & temp
+*.log
+npm-debug.log*
+
+# Node (if used later)
+node_modules/
+dist/
+build/
