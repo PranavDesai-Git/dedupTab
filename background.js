@@ -297,15 +297,28 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
             try {
                 const opener = await chrome.tabs.get(sourceTabId);
                 if (opener) {
+                    const children = tabChildren.get(sourceTabId) || [];
+                    const childSet = new Set(children);
+                    const windowTabs = await chrome.tabs.query({ windowId: opener.windowId });
+
+                    let targetIndex = opener.index + 1;
+                    for (const wt of windowTabs) {
+                        if (wt.id !== match.id && (wt.id === opener.id || childSet.has(wt.id))) {
+                            if (wt.index >= targetIndex) {
+                                targetIndex = wt.index + 1;
+                            }
+                        }
+                    }
+
                     await chrome.tabs.move(match.id, {
                         windowId: opener.windowId,
-                        index: opener.index + 1
+                        index: targetIndex
                     });
 
                     chrome.tabs.sendMessage(opener.id, {
                         type: "SHOW_REDIRECT_NOTICE",
                         canJumpBack: false,
-                        text: "Already open - pulled tab next to you"
+                        text: "Already open - placed at end of reading queue"
                     }).catch(() => {});
                 }
             } catch {
