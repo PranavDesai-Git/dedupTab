@@ -26,6 +26,20 @@
         "mac": "Alt+X"
       },
       "description": "Jump forward to next tab"
+    },
+    "jump_latest_child": {
+      "suggested_key": {
+        "default": "Alt+G",
+        "mac": "Alt+G"
+      },
+      "description": "Jump to latest tab opened from this page"
+    },
+    "jump_first_child": {
+      "suggested_key": {
+        "default": "Alt+Shift+G",
+        "mac": "Alt+Shift+G"
+      },
+      "description": "Jump to first tab opened from this page"
     }
   },
   "background": {
