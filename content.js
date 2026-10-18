@@ -1,11 +1,11 @@
-function showRedirectNotice(canJumpBack = false) {
+function showRedirectNotice(canJumpBack = false, customText = "Tab already open, redirected") {
     const container = document.createElement("div");
     const shadow = container.attachShadow({ mode: "closed" });
 
     const pill = document.createElement("div");
 
     const text = document.createElement("span");
-    text.textContent = "Tab already open, redirected";
+    text.textContent = customText;
     pill.appendChild(text);
 
     if (canJumpBack) {
@@ -87,7 +87,8 @@ function showRedirectNotice(canJumpBack = false) {
 // Listen for redirect notifications dispatched from background worker
 chrome.runtime.onMessage.addListener((message) => {
     if (message && message.type === "SHOW_REDIRECT_NOTICE") {
-        showRedirectNotice(Boolean(message.canJumpBack));
+        const text = message.text || "Tab already open, redirected";
+        showRedirectNotice(Boolean(message.canJumpBack), text);
     }
 });
 
