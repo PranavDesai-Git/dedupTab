@@ -199,12 +199,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// Handle Alt+Z and Alt+X command shortcuts
+async function jumpToChildTab(position) {
+    let currentTabId = currentActiveTabId;
+    if (!currentTabId) {
+        const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTab) currentTabId = activeTab.id;
+    }
+    if (!currentTabId) return;
+
+    const list = tabChildren.get(currentTabId);
+    if (!list || list.length === 0) return;
+
+    const candidateIds = position === "latest" ? [...list].reverse() : [...list];
+
+    for (const childId of candidateIds) {
+        try {
+            const childTab = await chrome.tabs.get(childId);
+            if (childTab) {
+                await chrome.tabs.update(childId, { active: true });
+                await chrome.windows.update(childTab.windowId, { focused: true });
+                return;
+            }
+        } catch {
+            removeChildTab(childId);
+        }
+    }
+}
+
+// Handle Alt+Z, Alt+X, Alt+G, and Alt+Shift+G command shortcuts
 chrome.commands.onCommand.addListener((command) => {
     if (command === "jump_back") {
         jumpBack();
     } else if (command === "jump_forward") {
         jumpForward();
+    } else if (command === "jump_latest_child") {
+        jumpToChildTab("latest");
+    } else if (command === "jump_first_child") {
+        jumpToChildTab("first");
     }
 });
 
