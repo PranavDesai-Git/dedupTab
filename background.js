@@ -106,45 +106,72 @@ function getParentTabId(childId) {
     return null;
 }
 
+async function clearSessionState() {
+    tabChildren.clear();
+    backStack.length = 0;
+    forwardStack.length = 0;
+    deadChildren.length = 0;
+    deadBranches.length = 0;
+    tabMetadata.clear();
+    try {
+        await chrome.storage.local.remove("dedupTabTreeState");
+    } catch {}
+}
+
 async function ensureInitialized() {
     if (isInitialized) return;
     if (initPromise) return initPromise;
 
     initPromise = (async () => {
-        try {
-            const stored = await chrome.storage.local.get("dedupTabTreeState");
-            if (stored && stored.dedupTabTreeState) {
-                const data = stored.dedupTabTreeState;
-                if (Array.isArray(data.tabChildren)) {
-                    for (const [pId, cIds] of data.tabChildren) {
-                        if (Array.isArray(cIds)) {
-                            tabChildren.set(Number(pId), cIds.map(Number));
+        let isNewSession = false;
+        if (chrome.storage && chrome.storage.session) {
+            try {
+                const sess = await chrome.storage.session.get("sessionActive");
+                if (!sess || !sess.sessionActive) {
+                    isNewSession = true;
+                    await chrome.storage.session.set({ sessionActive: true });
+                }
+            } catch {}
+        }
+
+        if (isNewSession) {
+            await clearSessionState();
+        } else {
+            try {
+                const stored = await chrome.storage.local.get("dedupTabTreeState");
+                if (stored && stored.dedupTabTreeState) {
+                    const data = stored.dedupTabTreeState;
+                    if (Array.isArray(data.tabChildren)) {
+                        for (const [pId, cIds] of data.tabChildren) {
+                            if (Array.isArray(cIds)) {
+                                tabChildren.set(Number(pId), cIds.map(Number));
+                            }
+                        }
+                    }
+                    if (Array.isArray(data.backStack)) {
+                        backStack.length = 0;
+                        backStack.push(...data.backStack.map(Number));
+                    }
+                    if (Array.isArray(data.forwardStack)) {
+                        forwardStack.length = 0;
+                        forwardStack.push(...data.forwardStack.map(Number));
+                    }
+                    if (Array.isArray(data.deadChildren)) {
+                        deadChildren.length = 0;
+                        deadChildren.push(...data.deadChildren);
+                    }
+                    if (Array.isArray(data.deadBranches)) {
+                        deadBranches.length = 0;
+                        deadBranches.push(...data.deadBranches);
+                    }
+                    if (Array.isArray(data.tabMetadata)) {
+                        for (const [tId, meta] of data.tabMetadata) {
+                            tabMetadata.set(Number(tId), meta);
                         }
                     }
                 }
-                if (Array.isArray(data.backStack)) {
-                    backStack.length = 0;
-                    backStack.push(...data.backStack.map(Number));
-                }
-                if (Array.isArray(data.forwardStack)) {
-                    forwardStack.length = 0;
-                    forwardStack.push(...data.forwardStack.map(Number));
-                }
-                if (Array.isArray(data.deadChildren)) {
-                    deadChildren.length = 0;
-                    deadChildren.push(...data.deadChildren);
-                }
-                if (Array.isArray(data.deadBranches)) {
-                    deadBranches.length = 0;
-                    deadBranches.push(...data.deadBranches);
-                }
-                if (Array.isArray(data.tabMetadata)) {
-                    for (const [tId, meta] of data.tabMetadata) {
-                        tabMetadata.set(Number(tId), meta);
-                    }
-                }
-            }
-        } catch {}
+            } catch {}
+        }
 
         try {
             const aliveTabs = await chrome.tabs.query({});
@@ -192,6 +219,26 @@ async function ensureInitialized() {
 
 // Start initialization immediately on service worker wake-up
 ensureInitialized();
+
+// Clear tree and navigation state when browser starts a fresh session
+chrome.runtime.onStartup.addListener(async () => {
+    await clearSessionState();
+    if (chrome.storage && chrome.storage.session) {
+        await chrome.storage.session.set({ sessionActive: true }).catch(() => {});
+    }
+    try {
+        const aliveTabs = await chrome.tabs.query({});
+        for (const tab of aliveTabs) {
+            saveTabMetadata(tab, false);
+            if (tab.active) currentActiveTabId = tab.id;
+            if (tab.openerTabId) {
+                addChildTab(tab.openerTabId, tab.id, false);
+            }
+        }
+    } catch {}
+    isInitialized = true;
+    saveState();
+});
 
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     await ensureInitialized();
