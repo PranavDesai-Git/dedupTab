@@ -27,19 +27,19 @@
       },
       "description": "Jump forward to next tab"
     },
-    "jump_first_child": {
+    "jump_tree_first": {
       "suggested_key": {
         "default": "Alt+G",
         "mac": "Alt+G"
       },
-      "description": "Jump to first tab opened from this page"
+      "description": "Jump to bottom of tree (first tab opened)"
     },
-    "jump_latest_child": {
+    "jump_tree_latest": {
       "suggested_key": {
         "default": "Alt+Shift+G",
         "mac": "Alt+Shift+G"
       },
-      "description": "Jump to latest tab opened from this page"
+      "description": "Jump to top of tree (latest tab opened)"
     }
   },
   "background": {
