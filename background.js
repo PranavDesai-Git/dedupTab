@@ -332,21 +332,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const normalized = normalizeUrl(message.url);
         bypassUrls.add(normalized);
         setTimeout(() => bypassUrls.delete(normalized), 4000);
+        sendResponse({ ok: true });
         return;
     }
 
     if (message.type === "TRIGGER_JUMP_BACK") {
         jumpBack();
+        sendResponse({ ok: true });
         return;
     }
 
     if (message.type === "EXEC_COMMAND" && message.command) {
-        if (message.command === "safe_kill") {
-            safeKillChildTab();
-        } else if (message.command === "revive_child") {
-            reviveDeadChild();
-        }
-        return;
+        ensureInitialized().then(async () => {
+            try {
+                if (message.command === "safe_kill") {
+                    await safeKillChildTab();
+                } else if (message.command === "revive_child") {
+                    await reviveDeadChild();
+                }
+                sendResponse({ ok: true });
+            } catch {
+                sendResponse({ ok: false });
+            }
+        }).catch(() => {
+            sendResponse({ ok: false });
+        });
+        return true;
     }
 
     if (message.type === "CHECK_AND_SWITCH_TAB" && message.url) {
@@ -355,30 +366,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         ensureInitialized().then(() => {
             chrome.tabs.query({}, async (tabs) => {
-                const match = tabs.find((t) => {
-                    if (!t.url || (sourceTabId && t.id === sourceTabId)) return false;
-                    return normalizeUrl(t.url) === targetNormalized;
-                });
-
-                if (match) {
-                    await chrome.tabs.update(match.id, { active: true });
-                    await chrome.windows.update(match.windowId, { focused: true });
-
-                    chrome.tabs.sendMessage(match.id, {
-                        type: "SHOW_REDIRECT_NOTICE",
-                        canJumpBack: Boolean(sourceTabId)
-                    }).catch(() => {});
-
-                    // Increment saved duplicate tab counter
-                    chrome.storage.local.get({ savedCount: 0 }, (data) => {
-                        chrome.storage.local.set({ savedCount: data.savedCount + 1 });
+                try {
+                    const match = tabs.find((t) => {
+                        if (!t.url || (sourceTabId && t.id === sourceTabId)) return false;
+                        return normalizeUrl(t.url) === targetNormalized;
                     });
 
-                    sendResponse({ found: true });
-                } else {
+                    if (match) {
+                        await chrome.tabs.update(match.id, { active: true });
+                        await chrome.windows.update(match.windowId, { focused: true });
+
+                        chrome.tabs.sendMessage(match.id, {
+                            type: "SHOW_REDIRECT_NOTICE",
+                            canJumpBack: Boolean(sourceTabId)
+                        }).catch(() => {});
+
+                        // Increment saved duplicate tab counter
+                        chrome.storage.local.get({ savedCount: 0 }, (data) => {
+                            chrome.storage.local.set({ savedCount: ((data && data.savedCount) || 0) + 1 });
+                        });
+
+                        sendResponse({ found: true });
+                    } else {
+                        sendResponse({ found: false });
+                    }
+                } catch {
                     sendResponse({ found: false });
                 }
             });
+        }).catch(() => {
+            sendResponse({ found: false });
         });
 
         return true; // Keep message channel open for async sendResponse

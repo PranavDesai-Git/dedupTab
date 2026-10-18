@@ -1,13 +1,21 @@
 function safeSendMessage(payload, callback) {
     if (!chrome.runtime?.id) return;
     try {
-        chrome.runtime.sendMessage(payload, (response) => {
-            if (chrome.runtime.lastError) {
-                if (callback) callback(null);
-                return;
+        if (typeof callback === "function") {
+            chrome.runtime.sendMessage(payload, (response) => {
+                const err = chrome.runtime.lastError;
+                if (err) {
+                    callback(null);
+                    return;
+                }
+                callback(response);
+            });
+        } else {
+            const promise = chrome.runtime.sendMessage(payload);
+            if (promise && typeof promise.catch === "function") {
+                promise.catch(() => {});
             }
-            if (callback) callback(response);
-        });
+        }
     } catch {
         // Extension context invalidated
     }
@@ -36,7 +44,9 @@ function showRedirectNotice(canJumpBack = false, customText = "Tab already open,
         btn.textContent = "Jump back";
         btn.addEventListener("click", () => {
             safeSendMessage({ type: "TRIGGER_JUMP_BACK" });
-            container.remove();
+            try {
+                container.remove();
+            } catch {}
         });
         pill.appendChild(btn);
     }
@@ -94,39 +104,56 @@ function showRedirectNotice(canJumpBack = false, customText = "Tab already open,
         }
       `;
 
-    shadow.appendChild(style);
-    shadow.appendChild(pill);
     try {
+        shadow.appendChild(style);
+        shadow.appendChild(pill);
         mountPoint.appendChild(container);
     } catch {
         return;
     }
 
-    requestAnimationFrame(() => pill.classList.add("visible"));
+    requestAnimationFrame(() => {
+        try {
+            pill.classList.add("visible");
+        } catch {}
+    });
 
     const displayDuration = canJumpBack ? 2500 : 1000;
     setTimeout(() => {
-        pill.classList.remove("visible");
-        setTimeout(() => container.remove(), 250);
+        try {
+            pill.classList.remove("visible");
+            setTimeout(() => {
+                try {
+                    container.remove();
+                } catch {}
+            }, 250);
+        } catch {}
     }, displayDuration);
 }
 
 // Listen for redirect notifications dispatched from background worker
-chrome.runtime.onMessage.addListener((message) => {
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message && message.type === "SHOW_REDIRECT_NOTICE") {
         const text = message.text || "Tab already open, redirected";
         showRedirectNotice(Boolean(message.canJumpBack), text);
+        if (typeof sendResponse === "function") {
+            sendResponse({ received: true });
+        }
     }
 });
 
 // Allow duplicate tab creation on Alt + Middle-click
 document.addEventListener("auxclick", (e) => {
     if (e.button === 1 && e.altKey) {
-        const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
-        if (link && link.href) {
+        const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+        const link = target ? target.closest("a[href]") : null;
+        if (!link) return;
+
+        const rawHref = typeof link.href === "string" ? link.href : (link.href?.baseVal || link.getAttribute("href") || "");
+        if (rawHref) {
             safeSendMessage({
                 type: "BYPASS_DEDUP",
-                url: link.href
+                url: rawHref
             });
         }
     }
@@ -137,21 +164,33 @@ document.addEventListener("click", (e) => {
     if (e.button !== 0) return;
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
 
-    const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    const link = target ? target.closest("a[href]") : null;
     if (!link) return;
 
     const hrefAttr = link.getAttribute("href");
     if (!hrefAttr || hrefAttr.startsWith("#") || hrefAttr.startsWith("javascript:")) return;
     if (link.hasAttribute("download")) return;
 
-    const url = link.href;
+    let url = "";
+    try {
+        const rawHref = typeof link.href === "string" ? link.href : (link.href?.baseVal || hrefAttr);
+        url = new URL(rawHref, window.location.href).href;
+    } catch {
+        return;
+    }
+
     if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) return;
-    if (url.startsWith(window.location.href + "#")) return;
+
+    // Ignore in-page anchor links
+    const currentBase = window.location.href.split("#")[0];
+    if (url === window.location.href || url.startsWith(currentBase + "#")) return;
+
+    const targetAttr = typeof link.target === "string" ? link.target : (link.target?.baseVal || link.getAttribute("target") || "");
+    const isNewTab = targetAttr === "_blank";
 
     e.preventDefault();
     e.stopPropagation();
-
-    const isNewTab = link.target === "_blank";
 
     safeSendMessage(
         { type: "CHECK_AND_SWITCH_TAB", url },
@@ -169,7 +208,9 @@ document.addEventListener("click", (e) => {
 
 // Listen for in-page detour keyboard shortcuts
 document.addEventListener("keydown", (e) => {
-    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+    if (!e || !e.target) return;
+    const el = e.target instanceof Element ? e.target : e.target?.parentElement;
+    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
 
     if (e.altKey && !e.shiftKey && e.code === "KeyW") {
         e.preventDefault();
@@ -179,8 +220,3 @@ document.addEventListener("keydown", (e) => {
         safeSendMessage({ type: "EXEC_COMMAND", command: "revive_child" });
     }
 }, true);
-
-
-
-
-
