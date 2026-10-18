@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>dedupTab</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    body {
+      margin: 0;
+      padding: 16px;
+      min-width: 260px;
+      background: Canvas;
+      color: CanvasText;
+      user-select: none;
+    }
+    header {
+      margin-bottom: 14px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    p.tagline {
+      margin: 2px 0 0 0;
+      font-size: 12px;
+      color: GrayText;
+    }
+    .stat-card {
+      background: rgba(128, 128, 128, 0.08);
+      border: 1px solid ButtonBorder;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .stat-card .label {
+      font-size: 12px;
+      color: GrayText;
+    }
+    .stat-card .value {
+      font-size: 16px;
+      font-weight: 600;
+    }
+    .shortcuts {
+      border-top: 1px solid ButtonBorder;
+      padding-top: 12px;
+      margin-bottom: 12px;
+    }
+    .shortcut-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+    kbd {
+      background: rgba(128, 128, 128, 0.15);
+      border: 1px solid ButtonBorder;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-family: inherit;
+    }
+    footer {
+      border-top: 1px solid ButtonBorder;
+      padding-top: 10px;
+      text-align: center;
+    }
+    button.link-btn {
+      all: unset;
+      font-size: 11px;
+      color: GrayText;
+      cursor: pointer;
+      text-decoration: underline;
+    }
+    button.link-btn:hover {
+      color: CanvasText;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>dedupTab</h1>
+    <p class="tagline">Helps you not get lost in the tab sauce</p>
+  </header>
+
+  <div class="stat-card">
+    <span class="label">Duplicate tabs saved</span>
+    <span class="value" id="saved-count">0</span>
+  </div>
+
+  <div class="shortcuts">
+    <div class="shortcut-row">
+      <span>Jump back to tab</span>
+      <span><kbd>Alt</kbd> + <kbd>Z</kbd></span>
+    </div>
+    <div class="shortcut-row">
+      <span>Force duplicate</span>
+      <span><kbd>Alt</kbd> + Middle Click</span>
+    </div>
+  </div>
+
+  <footer>
+    <button class="link-btn" id="config-shortcuts">Configure shortcuts</button>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>
