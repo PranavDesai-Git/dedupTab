@@ -67,6 +67,13 @@ function removeChildTab(childId) {
     tabChildren.delete(childId);
 }
 
+function getParentTabId(childId) {
+    for (const [parentId, list] of tabChildren.entries()) {
+        if (list.includes(childId)) return parentId;
+    }
+    return null;
+}
+
 
 // Initialize active tab on service worker startup
 chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
@@ -226,7 +233,70 @@ async function jumpToChildTab(position) {
     }
 }
 
-// Handle Alt+Z, Alt+X, Alt+G, and Alt+Shift+G command shortcuts
+async function stepSiblingChild(direction) {
+    let currentTabId = currentActiveTabId;
+    if (!currentTabId) {
+        const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTab) currentTabId = activeTab.id;
+    }
+    if (!currentTabId) return;
+
+    const parentId = getParentTabId(currentTabId);
+    let list = null;
+
+    if (!parentId) {
+        list = tabChildren.get(currentTabId);
+        if (list && list.length > 0 && direction === 1) {
+            return jumpToChildTab("first");
+        }
+        return;
+    }
+
+    list = tabChildren.get(parentId) || [];
+    const currentIndex = list.indexOf(currentTabId);
+    if (currentIndex === -1) return;
+
+    let targetIndex = currentIndex + direction;
+
+    while (targetIndex >= 0 && targetIndex < list.length) {
+        const candidateId = list[targetIndex];
+        try {
+            const tab = await chrome.tabs.get(candidateId);
+            if (tab) {
+                await chrome.tabs.update(candidateId, { active: true });
+                await chrome.windows.update(tab.windowId, { focused: true });
+                return;
+            }
+        } catch {
+            removeChildTab(candidateId);
+            list = tabChildren.get(parentId) || [];
+        }
+        targetIndex += direction;
+    }
+
+    if (direction === -1 && targetIndex < 0) {
+        try {
+            const parentTab = await chrome.tabs.get(parentId);
+            if (parentTab) {
+                await chrome.tabs.update(parentId, { active: true });
+                await chrome.windows.update(parentTab.windowId, { focused: true });
+                chrome.tabs.sendMessage(parentId, {
+                    type: "SHOW_REDIRECT_NOTICE",
+                    canJumpBack: false,
+                    text: "Returned to parent tab"
+                }).catch(() => {});
+            }
+        } catch {}
+    } else if (direction === 1 && targetIndex >= list.length) {
+        chrome.tabs.sendMessage(currentTabId, {
+            type: "SHOW_REDIRECT_NOTICE",
+            canJumpBack: false,
+            text: "Last tab in detour"
+        }).catch(() => {});
+    }
+}
+
+// Handle Alt+Z, Alt+X, Alt+G, Alt+Shift+G, Alt+Shift+E, and Alt+Shift+R command shortcuts
 chrome.commands.onCommand.addListener((command) => {
     if (command === "jump_back") {
         jumpBack();
@@ -236,6 +306,10 @@ chrome.commands.onCommand.addListener((command) => {
         jumpToChildTab("first");
     } else if (command === "jump_tree_latest" || command === "jump_first_child") {
         jumpToChildTab("latest");
+    } else if (command === "prev_child") {
+        stepSiblingChild(-1);
+    } else if (command === "next_child") {
+        stepSiblingChild(1);
     }
 });
 
