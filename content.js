@@ -174,7 +174,7 @@ document.addEventListener("keydown", (e) => {
     if (e.altKey && !e.shiftKey && e.code === "KeyW") {
         e.preventDefault();
         safeSendMessage({ type: "EXEC_COMMAND", command: "safe_kill" });
-    } else if (e.altKey && !e.shiftKey && e.code === "KeyQ") {
+    } else if ((e.altKey || e.ctrlKey) && !e.shiftKey && e.code === "KeyQ") {
         e.preventDefault();
         safeSendMessage({ type: "EXEC_COMMAND", command: "revive_child" });
     }

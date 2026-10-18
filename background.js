@@ -401,49 +401,93 @@ async function reviveDeadChild() {
         if (activeTab) currentTabId = activeTab.id;
     }
 
-    if (deadChildren.length === 0) {
-        if (currentTabId) {
-            chrome.tabs.sendMessage(currentTabId, {
+    // 1. Check if there is a recently killed parent branch to revive
+    if (deadBranches.length > 0) {
+        const branch = deadBranches.pop();
+        try {
+            const parentProps = {
+                url: branch.parent.url || "about:blank",
+                active: true
+            };
+            if (typeof branch.parent.windowId === "number") {
+                parentProps.windowId = branch.parent.windowId;
+            }
+            if (typeof branch.parent.index === "number") {
+                parentProps.index = branch.parent.index;
+            }
+            const revivedParent = await chrome.tabs.create(parentProps);
+            saveTabMetadata(revivedParent);
+
+            let childCount = 0;
+            for (const ch of branch.children) {
+                try {
+                    const childProps = {
+                        url: ch.url || "about:blank",
+                        openerTabId: revivedParent.id,
+                        windowId: revivedParent.windowId,
+                        active: false
+                    };
+                    const revivedChild = await chrome.tabs.create(childProps);
+                    saveTabMetadata(revivedChild);
+                    addChildTab(revivedParent.id, revivedChild.id);
+                    childCount++;
+                } catch {}
+            }
+
+            chrome.tabs.sendMessage(revivedParent.id, {
                 type: "SHOW_REDIRECT_NOTICE",
                 canJumpBack: false,
-                text: "No recently closed child tabs to revive"
+                text: `Revived branch: parent and ${childCount} child tabs`
             }).catch(() => {});
+            return;
+        } catch {}
+    }
+
+    // 2. Check if there is a single dead child to revive
+    if (deadChildren.length > 0) {
+        const dead = deadChildren.pop();
+        let parentAlive = false;
+
+        try {
+            await chrome.tabs.get(dead.parentId);
+            parentAlive = true;
+        } catch {
+            parentAlive = false;
         }
+
+        const createProps = {
+            url: dead.url,
+            active: true
+        };
+
+        if (parentAlive) {
+            createProps.openerTabId = dead.parentId;
+            createProps.windowId = dead.windowId;
+            createProps.index = dead.index;
+        }
+
+        try {
+            const revivedTab = await chrome.tabs.create(createProps);
+            saveTabMetadata(revivedTab);
+            if (parentAlive) {
+                addChildTab(dead.parentId, revivedTab.id);
+            }
+            chrome.tabs.sendMessage(revivedTab.id, {
+                type: "SHOW_REDIRECT_NOTICE",
+                canJumpBack: false,
+                text: `Revived child: ${dead.title || "tab"}`
+            }).catch(() => {});
+        } catch {}
         return;
     }
 
-    const dead = deadChildren.pop();
-    let parentAlive = false;
-
-    try {
-        await chrome.tabs.get(dead.parentId);
-        parentAlive = true;
-    } catch {
-        parentAlive = false;
-    }
-
-    const createProps = {
-        url: dead.url,
-        active: true
-    };
-
-    if (parentAlive) {
-        createProps.openerTabId = dead.parentId;
-        createProps.windowId = dead.windowId;
-        createProps.index = dead.index;
-    }
-
-    try {
-        const revivedTab = await chrome.tabs.create(createProps);
-        if (parentAlive) {
-            addChildTab(dead.parentId, revivedTab.id);
-        }
-        chrome.tabs.sendMessage(revivedTab.id, {
+    if (currentTabId) {
+        chrome.tabs.sendMessage(currentTabId, {
             type: "SHOW_REDIRECT_NOTICE",
             canJumpBack: false,
-            text: `Revived child: ${dead.title || "tab"}`
+            text: "No recently closed tabs or branches to revive"
         }).catch(() => {});
-    } catch {}
+    }
 }
 
 // Handle Alt+Z, Alt+X, Alt+G, and Alt+Shift+G command shortcuts
