@@ -9,7 +9,17 @@
     "storage"
   ],
   "action": {
-    "default_title": "dedupTab"
+    "default_title": "dedupTab",
+    "default_popup": "popup.html"
+  },
+  "commands": {
+    "jump_back": {
+      "suggested_key": {
+        "default": "Alt+Z",
+        "mac": "Alt+Z"
+      },
+      "description": "Jump back to previous tab"
+    }
   },
   "background": {
     "service_worker": "background.js"
