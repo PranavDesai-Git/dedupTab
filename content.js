@@ -1,6 +1,29 @@
+function safeSendMessage(payload, callback) {
+    if (!chrome.runtime?.id) return;
+    try {
+        chrome.runtime.sendMessage(payload, (response) => {
+            if (chrome.runtime.lastError) {
+                if (callback) callback(null);
+                return;
+            }
+            if (callback) callback(response);
+        });
+    } catch {
+        // Extension context invalidated
+    }
+}
+
 function showRedirectNotice(canJumpBack = false, customText = "Tab already open, redirected") {
-    const container = document.createElement("div");
-    const shadow = container.attachShadow({ mode: "closed" });
+    const mountPoint = document.body || document.documentElement;
+    if (!mountPoint) return;
+
+    let container, shadow;
+    try {
+        container = document.createElement("div");
+        shadow = container.attachShadow({ mode: "closed" });
+    } catch {
+        return;
+    }
 
     const pill = document.createElement("div");
 
@@ -12,7 +35,7 @@ function showRedirectNotice(canJumpBack = false, customText = "Tab already open,
         const btn = document.createElement("button");
         btn.textContent = "Jump back";
         btn.addEventListener("click", () => {
-            chrome.runtime.sendMessage({ type: "TRIGGER_JUMP_BACK" });
+            safeSendMessage({ type: "TRIGGER_JUMP_BACK" });
             container.remove();
         });
         pill.appendChild(btn);
@@ -73,7 +96,11 @@ function showRedirectNotice(canJumpBack = false, customText = "Tab already open,
 
     shadow.appendChild(style);
     shadow.appendChild(pill);
-    document.documentElement.appendChild(container);
+    try {
+        mountPoint.appendChild(container);
+    } catch {
+        return;
+    }
 
     requestAnimationFrame(() => pill.classList.add("visible"));
 
@@ -95,9 +122,9 @@ chrome.runtime.onMessage.addListener((message) => {
 // Allow duplicate tab creation on Alt + Middle-click
 document.addEventListener("auxclick", (e) => {
     if (e.button === 1 && e.altKey) {
-        const link = e.target.closest("a[href]");
+        const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
         if (link && link.href) {
-            chrome.runtime.sendMessage({
+            safeSendMessage({
                 type: "BYPASS_DEDUP",
                 url: link.href
             });
@@ -110,7 +137,7 @@ document.addEventListener("click", (e) => {
     if (e.button !== 0) return;
     if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
 
-    const link = e.target.closest("a[href]");
+    const link = e.target instanceof Element ? e.target.closest("a[href]") : null;
     if (!link) return;
 
     const hrefAttr = link.getAttribute("href");
@@ -126,10 +153,10 @@ document.addEventListener("click", (e) => {
 
     const isNewTab = link.target === "_blank";
 
-    chrome.runtime.sendMessage(
+    safeSendMessage(
         { type: "CHECK_AND_SWITCH_TAB", url },
         (response) => {
-            if (chrome.runtime.lastError || !response || !response.found) {
+            if (!response || !response.found) {
                 if (isNewTab) {
                     window.open(url, "_blank");
                 } else {
@@ -146,10 +173,10 @@ document.addEventListener("keydown", (e) => {
 
     if (e.altKey && !e.shiftKey && e.code === "KeyW") {
         e.preventDefault();
-        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "safe_kill" });
+        safeSendMessage({ type: "EXEC_COMMAND", command: "safe_kill" });
     } else if (e.altKey && !e.shiftKey && e.code === "KeyQ") {
         e.preventDefault();
-        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "revive_child" });
+        safeSendMessage({ type: "EXEC_COMMAND", command: "revive_child" });
     }
 }, true);
 
