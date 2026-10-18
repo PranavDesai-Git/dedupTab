@@ -50,4 +50,3 @@ function showRedirectNotice() {
     }, 1000);
 }
 
-showRedirectNotice();
