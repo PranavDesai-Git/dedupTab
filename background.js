@@ -34,3 +34,46 @@ function normalizeUrl(rawUrl) {
     }
 }
 
+// In-memory state for bypass tokens and jump-back history
+const bypassUrls = new Set();
+let lastRedirectSourceTabId = null;
+
+function recordRedirectSource(sourceTabId) {
+    if (typeof sourceTabId === "number") {
+        lastRedirectSourceTabId = sourceTabId;
+    }
+}
+
+async function jumpBackToSource() {
+    if (lastRedirectSourceTabId === null) return;
+    try {
+        const tab = await chrome.tabs.get(lastRedirectSourceTabId);
+        if (tab) {
+            await chrome.tabs.update(lastRedirectSourceTabId, { active: true });
+            await chrome.windows.update(tab.windowId, { focused: true });
+        }
+    } catch {
+        lastRedirectSourceTabId = null;
+    }
+}
+
+// Handle bypass tokens and manual jump back triggers
+chrome.runtime.onMessage.addListener((message, sender) => {
+    if (!message) return;
+    if (message.type === "BYPASS_DEDUP" && message.url) {
+        const normalized = normalizeUrl(message.url);
+        bypassUrls.add(normalized);
+        setTimeout(() => bypassUrls.delete(normalized), 4000);
+    } else if (message.type === "TRIGGER_JUMP_BACK") {
+        jumpBackToSource();
+    }
+});
+
+// Handle Alt+Z command shortcut
+chrome.commands.onCommand.addListener((command) => {
+    if (command === "jump_back") {
+        jumpBackToSource();
+    }
+});
+
+
