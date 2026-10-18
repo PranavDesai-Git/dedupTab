@@ -91,4 +91,18 @@ chrome.runtime.onMessage.addListener((message) => {
     }
 });
 
+// Allow duplicate tab creation on Alt + Middle-click
+document.addEventListener("auxclick", (e) => {
+    if (e.button === 1 && e.altKey) {
+        const link = e.target.closest("a[href]");
+        if (link && link.href) {
+            chrome.runtime.sendMessage({
+                type: "BYPASS_DEDUP",
+                url: link.href
+            });
+        }
+    }
+}, true);
+
+
 
