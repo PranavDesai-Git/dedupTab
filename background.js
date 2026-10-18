@@ -45,7 +45,23 @@ const tabMetadata = new Map(); // tabId -> { url, title, windowId, index }
 let currentActiveTabId = null;
 let isNavigatingHistory = false;
 
-function saveTabMetadata(tab) {
+let isInitialized = false;
+let initPromise = null;
+
+function saveState() {
+    if (!isInitialized) return;
+    const data = {
+        tabChildren: Array.from(tabChildren.entries()),
+        backStack: backStack.slice(-50),
+        forwardStack: forwardStack.slice(-50),
+        deadChildren: deadChildren.slice(-30),
+        deadBranches: deadBranches.slice(-20),
+        tabMetadata: Array.from(tabMetadata.entries())
+    };
+    chrome.storage.local.set({ dedupTabTreeState: data }).catch(() => {});
+}
+
+function saveTabMetadata(tab, shouldPersist = true) {
     if (!tab || !tab.id) return;
     tabMetadata.set(tab.id, {
         url: tab.url || tab.pendingUrl || "",
@@ -53,9 +69,10 @@ function saveTabMetadata(tab) {
         windowId: tab.windowId,
         index: tab.index
     });
+    if (shouldPersist) saveState();
 }
 
-function addChildTab(parentId, childId) {
+function addChildTab(parentId, childId, shouldPersist = true) {
     if (!parentId || !childId || parentId === childId) return;
     let list = tabChildren.get(parentId);
     if (!list) {
@@ -67,9 +84,10 @@ function addChildTab(parentId, childId) {
         list.splice(idx, 1);
     }
     list.push(childId);
+    if (shouldPersist) saveState();
 }
 
-function removeChildTab(childId) {
+function removeChildTab(childId, shouldPersist = true) {
     for (const [parentId, list] of tabChildren.entries()) {
         const idx = list.indexOf(childId);
         if (idx !== -1) {
@@ -78,6 +96,7 @@ function removeChildTab(childId) {
         }
     }
     tabChildren.delete(childId);
+    if (shouldPersist) saveState();
 }
 
 function getParentTabId(childId) {
@@ -87,17 +106,95 @@ function getParentTabId(childId) {
     return null;
 }
 
-// Initialize active tab and tab metadata cache on service worker startup
-chrome.tabs.query({}, (tabs) => {
-    if (Array.isArray(tabs)) {
-        for (const tab of tabs) {
-            saveTabMetadata(tab);
-            if (tab.active) currentActiveTabId = tab.id;
-        }
-    }
-});
+async function ensureInitialized() {
+    if (isInitialized) return;
+    if (initPromise) return initPromise;
 
-chrome.tabs.onActivated.addListener(({ tabId }) => {
+    initPromise = (async () => {
+        try {
+            const stored = await chrome.storage.local.get("dedupTabTreeState");
+            if (stored && stored.dedupTabTreeState) {
+                const data = stored.dedupTabTreeState;
+                if (Array.isArray(data.tabChildren)) {
+                    for (const [pId, cIds] of data.tabChildren) {
+                        if (Array.isArray(cIds)) {
+                            tabChildren.set(Number(pId), cIds.map(Number));
+                        }
+                    }
+                }
+                if (Array.isArray(data.backStack)) {
+                    backStack.length = 0;
+                    backStack.push(...data.backStack.map(Number));
+                }
+                if (Array.isArray(data.forwardStack)) {
+                    forwardStack.length = 0;
+                    forwardStack.push(...data.forwardStack.map(Number));
+                }
+                if (Array.isArray(data.deadChildren)) {
+                    deadChildren.length = 0;
+                    deadChildren.push(...data.deadChildren);
+                }
+                if (Array.isArray(data.deadBranches)) {
+                    deadBranches.length = 0;
+                    deadBranches.push(...data.deadBranches);
+                }
+                if (Array.isArray(data.tabMetadata)) {
+                    for (const [tId, meta] of data.tabMetadata) {
+                        tabMetadata.set(Number(tId), meta);
+                    }
+                }
+            }
+        } catch {}
+
+        try {
+            const aliveTabs = await chrome.tabs.query({});
+            const aliveTabIds = new Set(aliveTabs.map((t) => t.id));
+
+            for (const tab of aliveTabs) {
+                saveTabMetadata(tab, false);
+                if (tab.active) currentActiveTabId = tab.id;
+                if (tab.openerTabId && aliveTabIds.has(tab.openerTabId)) {
+                    addChildTab(tab.openerTabId, tab.id, false);
+                }
+            }
+
+            // Prune dead tabs from tabChildren
+            for (const parentId of Array.from(tabChildren.keys())) {
+                if (!aliveTabIds.has(parentId)) {
+                    tabChildren.delete(parentId);
+                } else {
+                    const children = tabChildren.get(parentId).filter((cId) => aliveTabIds.has(cId));
+                    if (children.length === 0) {
+                        tabChildren.delete(parentId);
+                    } else {
+                        tabChildren.set(parentId, children);
+                    }
+                }
+            }
+
+            // Prune dead tabs from backStack and forwardStack
+            let i = backStack.length;
+            while (i--) {
+                if (!aliveTabIds.has(backStack[i])) backStack.splice(i, 1);
+            }
+            i = forwardStack.length;
+            while (i--) {
+                if (!aliveTabIds.has(forwardStack[i])) forwardStack.splice(i, 1);
+            }
+        } catch {}
+
+        isInitialized = true;
+        saveState();
+    })();
+
+    return initPromise;
+}
+
+// Start initialization immediately on service worker wake-up
+ensureInitialized();
+
+chrome.tabs.onActivated.addListener(async ({ tabId }) => {
+    await ensureInitialized();
     if (isNavigatingHistory) {
         isNavigatingHistory = false;
         currentActiveTabId = tabId;
@@ -110,11 +207,13 @@ chrome.tabs.onActivated.addListener(({ tabId }) => {
             if (backStack.length > 50) backStack.shift();
         }
         forwardStack.length = 0; // New navigation resets forward history
+        saveState();
     }
     currentActiveTabId = tabId;
 });
 
 async function jumpBack() {
+    await ensureInitialized();
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -133,6 +232,7 @@ async function jumpBack() {
                     if (forwardStack.length > 50) forwardStack.shift();
                 }
                 isNavigatingHistory = true;
+                saveState();
                 await chrome.tabs.update(targetTabId, { active: true });
                 await chrome.windows.update(targetTab.windowId, { focused: true });
                 return;
@@ -141,9 +241,11 @@ async function jumpBack() {
             // Tab was closed, continue searching stack
         }
     }
+    saveState();
 }
 
 async function jumpForward() {
+    await ensureInitialized();
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -162,6 +264,7 @@ async function jumpForward() {
                     if (backStack.length > 50) backStack.shift();
                 }
                 isNavigatingHistory = true;
+                saveState();
                 await chrome.tabs.update(targetTabId, { active: true });
                 await chrome.windows.update(targetTab.windowId, { focused: true });
                 return;
@@ -170,6 +273,7 @@ async function jumpForward() {
             // Tab was closed, continue searching stack
         }
     }
+    saveState();
 }
 
 
@@ -202,30 +306,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const targetNormalized = normalizeUrl(message.url);
         const sourceTabId = sender.tab ? sender.tab.id : null;
 
-        chrome.tabs.query({}, async (tabs) => {
-            const match = tabs.find((t) => {
-                if (!t.url || (sourceTabId && t.id === sourceTabId)) return false;
-                return normalizeUrl(t.url) === targetNormalized;
-            });
-
-            if (match) {
-                await chrome.tabs.update(match.id, { active: true });
-                await chrome.windows.update(match.windowId, { focused: true });
-
-                chrome.tabs.sendMessage(match.id, {
-                    type: "SHOW_REDIRECT_NOTICE",
-                    canJumpBack: Boolean(sourceTabId)
-                }).catch(() => {});
-
-                // Increment saved duplicate tab counter
-                chrome.storage.local.get({ savedCount: 0 }, (data) => {
-                    chrome.storage.local.set({ savedCount: data.savedCount + 1 });
+        ensureInitialized().then(() => {
+            chrome.tabs.query({}, async (tabs) => {
+                const match = tabs.find((t) => {
+                    if (!t.url || (sourceTabId && t.id === sourceTabId)) return false;
+                    return normalizeUrl(t.url) === targetNormalized;
                 });
 
-                sendResponse({ found: true });
-            } else {
-                sendResponse({ found: false });
-            }
+                if (match) {
+                    await chrome.tabs.update(match.id, { active: true });
+                    await chrome.windows.update(match.windowId, { focused: true });
+
+                    chrome.tabs.sendMessage(match.id, {
+                        type: "SHOW_REDIRECT_NOTICE",
+                        canJumpBack: Boolean(sourceTabId)
+                    }).catch(() => {});
+
+                    // Increment saved duplicate tab counter
+                    chrome.storage.local.get({ savedCount: 0 }, (data) => {
+                        chrome.storage.local.set({ savedCount: data.savedCount + 1 });
+                    });
+
+                    sendResponse({ found: true });
+                } else {
+                    sendResponse({ found: false });
+                }
+            });
         });
 
         return true; // Keep message channel open for async sendResponse
@@ -233,6 +339,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 async function jumpToChildTab(position) {
+    await ensureInitialized();
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -323,6 +430,7 @@ async function stepSiblingChild(direction) {
 }
 
 async function safeKillChildTab() {
+    await ensureInitialized();
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -389,12 +497,14 @@ async function safeKillChildTab() {
     } catch {}
 
     removeChildTab(currentTabId);
+    saveState();
     try {
         await chrome.tabs.remove(currentTabId);
     } catch {}
 }
 
 async function reviveDeadChild() {
+    await ensureInitialized();
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -404,6 +514,7 @@ async function reviveDeadChild() {
     // 1. Check if there is a recently killed parent branch to revive
     if (deadBranches.length > 0) {
         const branch = deadBranches.pop();
+        saveState();
         try {
             const parentProps = {
                 url: branch.parent.url || "about:blank",
@@ -446,6 +557,7 @@ async function reviveDeadChild() {
     // 2. Check if there is a single dead child to revive
     if (deadChildren.length > 0) {
         const dead = deadChildren.pop();
+        saveState();
         let parentAlive = false;
 
         try {
@@ -491,7 +603,8 @@ async function reviveDeadChild() {
 }
 
 // Handle Alt+Z, Alt+X, Alt+G, and Alt+Shift+G command shortcuts
-chrome.commands.onCommand.addListener((command) => {
+chrome.commands.onCommand.addListener(async (command) => {
+    await ensureInitialized();
     if (command === "jump_back") {
         jumpBack();
     } else if (command === "jump_forward") {
@@ -506,7 +619,8 @@ chrome.commands.onCommand.addListener((command) => {
 // Track newly created tabs to only close freshly spawned duplicates (e.g. from middle-click or external apps)
 const pendingNewTabs = new Map();
 
-chrome.tabs.onCreated.addListener((tab) => {
+chrome.tabs.onCreated.addListener(async (tab) => {
+    await ensureInitialized();
     saveTabMetadata(tab);
     pendingNewTabs.set(tab.id, Date.now());
     setTimeout(() => pendingNewTabs.delete(tab.id), 10000);
@@ -517,7 +631,8 @@ chrome.tabs.onCreated.addListener((tab) => {
     }
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => {
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+    await ensureInitialized();
     pendingNewTabs.delete(tabId);
 
     // If this tab had alive children, cascade close them and save branch snapshot
@@ -550,9 +665,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     while ((idx = backStack.indexOf(tabId)) !== -1) backStack.splice(idx, 1);
     while ((idx = forwardStack.indexOf(tabId)) !== -1) forwardStack.splice(idx, 1);
     if (currentActiveTabId === tabId) currentActiveTabId = null;
+    saveState();
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    await ensureInitialized();
     saveTabMetadata(tab);
     const url = changeInfo.url || (pendingNewTabs.has(tabId) && tab.url);
     if (!url || !pendingNewTabs.has(tabId)) return;
