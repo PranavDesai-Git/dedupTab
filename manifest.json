@@ -19,6 +19,13 @@
         "mac": "Alt+Z"
       },
       "description": "Jump back to previous tab"
+    },
+    "jump_forward": {
+      "suggested_key": {
+        "default": "Alt+X",
+        "mac": "Alt+X"
+      },
+      "description": "Jump forward to next tab"
     }
   },
   "background": {
