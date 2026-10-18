@@ -34,12 +34,39 @@ function normalizeUrl(rawUrl) {
     }
 }
 
-// In-memory state for bypass tokens and tab navigation history
+// In-memory state for bypass tokens, tab navigation history, and child tab stacks
 const bypassUrls = new Set();
 const backStack = [];
 const forwardStack = [];
+const tabChildren = new Map(); // parentTabId -> Array<childTabId>
 let currentActiveTabId = null;
 let isNavigatingHistory = false;
+
+function addChildTab(parentId, childId) {
+    if (!parentId || !childId || parentId === childId) return;
+    let list = tabChildren.get(parentId);
+    if (!list) {
+        list = [];
+        tabChildren.set(parentId, list);
+    }
+    const idx = list.indexOf(childId);
+    if (idx !== -1) {
+        list.splice(idx, 1);
+    }
+    list.push(childId);
+}
+
+function removeChildTab(childId) {
+    for (const [parentId, list] of tabChildren.entries()) {
+        const idx = list.indexOf(childId);
+        if (idx !== -1) {
+            list.splice(idx, 1);
+            if (list.length === 0) tabChildren.delete(parentId);
+        }
+    }
+    tabChildren.delete(childId);
+}
+
 
 // Initialize active tab on service worker startup
 chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
@@ -187,10 +214,16 @@ const pendingNewTabs = new Map();
 chrome.tabs.onCreated.addListener((tab) => {
     pendingNewTabs.set(tab.id, Date.now());
     setTimeout(() => pendingNewTabs.delete(tab.id), 10000);
+
+    const openerId = tab.openerTabId || currentActiveTabId;
+    if (openerId) {
+        addChildTab(openerId, tab.id);
+    }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     pendingNewTabs.delete(tabId);
+    removeChildTab(tabId);
     let idx;
     while ((idx = backStack.indexOf(tabId)) !== -1) backStack.splice(idx, 1);
     while ((idx = forwardStack.indexOf(tabId)) !== -1) forwardStack.splice(idx, 1);
@@ -218,6 +251,9 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         pendingNewTabs.delete(tabId);
 
         const sourceTabId = tab.openerTabId || null;
+        if (sourceTabId) {
+            addChildTab(sourceTabId, match.id);
+        }
         const isBackgroundOpen = !tab.active;
 
         try {
