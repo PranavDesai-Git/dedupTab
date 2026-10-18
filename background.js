@@ -34,11 +34,12 @@ function normalizeUrl(rawUrl) {
     }
 }
 
-// In-memory state for bypass tokens and tab origin tracking
+// In-memory state for bypass tokens and tab navigation history
 const bypassUrls = new Set();
-const tabOrigins = new Map();
+const backStack = [];
+const forwardStack = [];
 let currentActiveTabId = null;
-let previousActiveTabId = null;
+let isNavigatingHistory = false;
 
 // Initialize active tab on service worker startup
 chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
@@ -46,43 +47,80 @@ chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
+    if (isNavigatingHistory) {
+        isNavigatingHistory = false;
+        currentActiveTabId = tabId;
+        return;
+    }
+
     if (currentActiveTabId && currentActiveTabId !== tabId) {
-        previousActiveTabId = currentActiveTabId;
+        if (backStack.length === 0 || backStack[backStack.length - 1] !== currentActiveTabId) {
+            backStack.push(currentActiveTabId);
+            if (backStack.length > 50) backStack.shift();
+        }
+        forwardStack.length = 0; // New navigation resets forward history
     }
     currentActiveTabId = tabId;
 });
 
-function recordRedirectSource(targetTabId, sourceTabId) {
-    if (typeof targetTabId === "number" && typeof sourceTabId === "number") {
-        tabOrigins.set(targetTabId, sourceTabId);
-    }
-}
-
-
-async function jumpBackToSource() {
+async function jumpBack() {
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
         if (activeTab) currentTabId = activeTab.id;
     }
-    if (!currentTabId) return;
 
-    const targetTabId = tabOrigins.get(currentTabId) || previousActiveTabId;
-    if (!targetTabId || targetTabId === currentTabId) return;
+    while (backStack.length > 0) {
+        const targetTabId = backStack.pop();
+        if (targetTabId === currentTabId) continue;
 
-    try {
-        const targetTab = await chrome.tabs.get(targetTabId);
-        if (targetTab) {
-            // Enable bidirectional toggle back and forth
-            tabOrigins.set(targetTabId, currentTabId);
-
-            await chrome.tabs.update(targetTabId, { active: true });
-            await chrome.windows.update(targetTab.windowId, { focused: true });
+        try {
+            const targetTab = await chrome.tabs.get(targetTabId);
+            if (targetTab) {
+                if (currentTabId) {
+                    forwardStack.push(currentTabId);
+                    if (forwardStack.length > 50) forwardStack.shift();
+                }
+                isNavigatingHistory = true;
+                await chrome.tabs.update(targetTabId, { active: true });
+                await chrome.windows.update(targetTab.windowId, { focused: true });
+                return;
+            }
+        } catch {
+            // Tab was closed, continue searching stack
         }
-    } catch {
-        tabOrigins.delete(currentTabId);
     }
 }
+
+async function jumpForward() {
+    let currentTabId = currentActiveTabId;
+    if (!currentTabId) {
+        const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTab) currentTabId = activeTab.id;
+    }
+
+    while (forwardStack.length > 0) {
+        const targetTabId = forwardStack.pop();
+        if (targetTabId === currentTabId) continue;
+
+        try {
+            const targetTab = await chrome.tabs.get(targetTabId);
+            if (targetTab) {
+                if (currentTabId) {
+                    backStack.push(currentTabId);
+                    if (backStack.length > 50) backStack.shift();
+                }
+                isNavigatingHistory = true;
+                await chrome.tabs.update(targetTabId, { active: true });
+                await chrome.windows.update(targetTab.windowId, { focused: true });
+                return;
+            }
+        } catch {
+            // Tab was closed, continue searching stack
+        }
+    }
+}
+
 
 // Handle bypass tokens, manual jump back triggers, and link deduplication requests
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -96,7 +134,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === "TRIGGER_JUMP_BACK") {
-        jumpBackToSource();
+        jumpBack();
         return;
     }
 
@@ -111,8 +149,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
 
             if (match) {
-                recordRedirectSource(match.id, sourceTabId);
-
                 await chrome.tabs.update(match.id, { active: true });
                 await chrome.windows.update(match.windowId, { focused: true });
 
@@ -136,10 +172,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 });
 
-// Handle Alt+Z command shortcut
+// Handle Alt+Z and Alt+X command shortcuts
 chrome.commands.onCommand.addListener((command) => {
     if (command === "jump_back") {
-        jumpBackToSource();
+        jumpBack();
+    } else if (command === "jump_forward") {
+        jumpForward();
     }
 });
 
@@ -149,18 +187,14 @@ const pendingNewTabs = new Map();
 chrome.tabs.onCreated.addListener((tab) => {
     pendingNewTabs.set(tab.id, Date.now());
     setTimeout(() => pendingNewTabs.delete(tab.id), 10000);
-
-    const originTabId = tab.openerTabId || currentActiveTabId;
-    if (originTabId && originTabId !== tab.id) {
-        tabOrigins.set(tab.id, originTabId);
-    }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     pendingNewTabs.delete(tabId);
-    tabOrigins.delete(tabId);
+    let idx;
+    while ((idx = backStack.indexOf(tabId)) !== -1) backStack.splice(idx, 1);
+    while ((idx = forwardStack.indexOf(tabId)) !== -1) forwardStack.splice(idx, 1);
     if (currentActiveTabId === tabId) currentActiveTabId = null;
-    if (previousActiveTabId === tabId) previousActiveTabId = null;
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -184,7 +218,6 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
         pendingNewTabs.delete(tabId);
 
         const sourceTabId = tab.openerTabId || null;
-        recordRedirectSource(match.id, sourceTabId);
 
         try {
             await chrome.tabs.remove(tabId);
