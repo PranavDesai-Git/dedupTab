@@ -232,10 +232,10 @@ chrome.commands.onCommand.addListener((command) => {
         jumpBack();
     } else if (command === "jump_forward") {
         jumpForward();
-    } else if (command === "jump_latest_child") {
-        jumpToChildTab("latest");
-    } else if (command === "jump_first_child") {
+    } else if (command === "jump_tree_first" || command === "jump_latest_child") {
         jumpToChildTab("first");
+    } else if (command === "jump_tree_latest" || command === "jump_first_child") {
+        jumpToChildTab("latest");
     }
 });
 
