@@ -699,26 +699,85 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
     await ensureInitialized();
     pendingNewTabs.delete(tabId);
 
-    // If this tab had alive children, cascade close them and save branch snapshot
+    // If this tab had alive children, decide whether to promote first child or cascade close
     if (tabChildren.has(tabId)) {
         const children = tabChildren.get(tabId) || [];
         if (children.length > 0) {
-            const parentMeta = tabMetadata.get(tabId) || { id: tabId };
-            const childrenMeta = [];
-            for (const childId of children) {
-                const chMeta = tabMetadata.get(childId);
-                if (chMeta) childrenMeta.push(chMeta);
-            }
-            deadBranches.push({
-                parent: parentMeta,
-                children: childrenMeta
-            });
-            if (deadBranches.length > 20) deadBranches.shift();
+            const parentId = getParentTabId(tabId);
 
-            for (const childId of children) {
+            let totalAliveTabs = 0;
+            try {
+                const alive = await chrome.tabs.query({});
+                totalAliveTabs = alive.length;
+            } catch {}
+
+            const isRoot = !parentId;
+            const isLastRemainingBranch = totalAliveTabs <= children.length + 1;
+
+            if (isRoot || isLastRemainingBranch) {
+                // Promote the first child to root instead of cascade closing
+                const newRootId = children[0];
+                const remainingChildren = children.slice(1);
+
+                // Re-parent siblings to the new root
+                if (remainingChildren.length > 0) {
+                    const existingChildren = tabChildren.get(newRootId) || [];
+                    for (const rcId of remainingChildren) {
+                        if (!existingChildren.includes(rcId) && rcId !== newRootId) {
+                            existingChildren.push(rcId);
+                        }
+                    }
+                    tabChildren.set(newRootId, existingChildren);
+                }
+
+                // If closed tab was a child of a higher parent, re-parent newRoot to that parent
+                if (parentId) {
+                    addChildTab(parentId, newRootId, false);
+                }
+
+                // Save closed tab to deadChildren so Ctrl+Q can revive it
+                const parentMeta = tabMetadata.get(tabId) || { id: tabId };
+                deadChildren.push({
+                    url: parentMeta.url,
+                    title: parentMeta.title,
+                    index: parentMeta.index,
+                    windowId: parentMeta.windowId,
+                    parentId: parentId || null
+                });
+                if (deadChildren.length > 30) deadChildren.shift();
+
+                // Focus new root if needed
                 try {
-                    chrome.tabs.remove(childId);
+                    const newRootTab = await chrome.tabs.get(newRootId);
+                    if (newRootTab) {
+                        await chrome.tabs.update(newRootId, { active: true });
+                        await chrome.windows.update(newRootTab.windowId, { focused: true });
+                        chrome.tabs.sendMessage(newRootId, {
+                            type: "SHOW_REDIRECT_NOTICE",
+                            canJumpBack: false,
+                            text: "Root closed: promoted first child as new root"
+                        }).catch(() => {});
+                    }
                 } catch {}
+            } else {
+                // Non-root detour tab closure: cascade close detour children and save branch
+                const parentMeta = tabMetadata.get(tabId) || { id: tabId };
+                const childrenMeta = [];
+                for (const childId of children) {
+                    const chMeta = tabMetadata.get(childId);
+                    if (chMeta) childrenMeta.push(chMeta);
+                }
+                deadBranches.push({
+                    parent: parentMeta,
+                    children: childrenMeta
+                });
+                if (deadBranches.length > 20) deadBranches.shift();
+
+                for (const childId of children) {
+                    try {
+                        chrome.tabs.remove(childId);
+                    } catch {}
+                }
             }
         }
     }
