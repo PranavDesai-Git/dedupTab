@@ -116,4 +116,60 @@ chrome.commands.onCommand.addListener((command) => {
     }
 });
 
+// Track newly created tabs to only close freshly spawned duplicates (e.g. from middle-click or external apps)
+const pendingNewTabs = new Map();
+
+chrome.tabs.onCreated.addListener((tab) => {
+    pendingNewTabs.set(tab.id, Date.now());
+    setTimeout(() => pendingNewTabs.delete(tab.id), 10000);
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+    pendingNewTabs.delete(tabId);
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    const url = changeInfo.url || (pendingNewTabs.has(tabId) && tab.url);
+    if (!url || !pendingNewTabs.has(tabId)) return;
+    if (!url.startsWith("http://") && !url.startsWith("https://")) return;
+
+    const normalized = normalizeUrl(url);
+
+    // If marked as bypass (e.g. via Alt+Middle-click), allow duplicate
+    if (bypassUrls.has(normalized)) {
+        bypassUrls.delete(normalized);
+        pendingNewTabs.delete(tabId);
+        return;
+    }
+
+    const allTabs = await chrome.tabs.query({});
+    const match = allTabs.find((t) => t.id !== tabId && t.url && normalizeUrl(t.url) === normalized);
+
+    if (match) {
+        pendingNewTabs.delete(tabId);
+
+        const sourceTabId = tab.openerTabId || null;
+        recordRedirectSource(sourceTabId);
+
+        try {
+            await chrome.tabs.remove(tabId);
+        } catch {
+            // Tab may have already been closed
+        }
+
+        await chrome.tabs.update(match.id, { active: true });
+        await chrome.windows.update(match.windowId, { focused: true });
+
+        chrome.tabs.sendMessage(match.id, {
+            type: "SHOW_REDIRECT_NOTICE",
+            canJumpBack: Boolean(sourceTabId)
+        }).catch(() => {});
+
+        chrome.storage.local.get({ savedCount: 0 }, (data) => {
+            chrome.storage.local.set({ savedCount: data.savedCount + 1 });
+        });
+    }
+});
+
+
 
