@@ -39,6 +39,7 @@ const bypassUrls = new Set();
 const backStack = [];
 const forwardStack = [];
 const tabChildren = new Map(); // parentTabId -> Array<childTabId>
+const deadChildren = []; // Array of { url, title, parentId, index, windowId }
 let currentActiveTabId = null;
 let isNavigatingHistory = false;
 
@@ -173,12 +174,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.type === "EXEC_COMMAND" && message.command) {
-        if (message.command === "prev_child") {
-            stepSiblingChild(-1);
-        } else if (message.command === "next_child") {
-            stepSiblingChild(1);
-        } else if (message.command === "close_detour") {
-            closeDetour();
+        if (message.command === "safe_kill") {
+            safeKillChildTab();
+        } else if (message.command === "revive_child") {
+            reviveDeadChild();
         }
         return;
     }
@@ -307,7 +306,7 @@ async function stepSiblingChild(direction) {
     }
 }
 
-async function closeDetour() {
+async function safeKillChildTab() {
     let currentTabId = currentActiveTabId;
     if (!currentTabId) {
         const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -315,43 +314,123 @@ async function closeDetour() {
     }
     if (!currentTabId) return;
 
-    let parentId = getParentTabId(currentTabId);
-    let childrenToClose = [];
+    const parentId = getParentTabId(currentTabId);
 
-    if (parentId) {
-        childrenToClose = tabChildren.get(parentId) || [];
-    } else {
-        parentId = currentTabId;
-        childrenToClose = tabChildren.get(currentTabId) || [];
+    if (!parentId) {
+        chrome.tabs.sendMessage(currentTabId, {
+            type: "SHOW_REDIRECT_NOTICE",
+            canJumpBack: false,
+            text: "Protected: root tab (safe kill only closes child tabs)"
+        }).catch(() => {});
+        return;
     }
 
-    if (childrenToClose.length === 0) return;
+    let currentTab = null;
+    try {
+        currentTab = await chrome.tabs.get(currentTabId);
+    } catch {
+        return;
+    }
+
+    deadChildren.push({
+        url: currentTab.url,
+        title: currentTab.title,
+        parentId,
+        index: currentTab.index,
+        windowId: currentTab.windowId
+    });
+    if (deadChildren.length > 30) deadChildren.shift();
+
+    const siblings = tabChildren.get(parentId) || [];
+    const childIdx = siblings.indexOf(currentTabId);
+    let nextTargetId = null;
+
+    if (childIdx !== -1) {
+        if (childIdx + 1 < siblings.length) {
+            nextTargetId = siblings[childIdx + 1];
+        } else if (childIdx - 1 >= 0) {
+            nextTargetId = siblings[childIdx - 1];
+        } else {
+            nextTargetId = parentId;
+        }
+    } else {
+        nextTargetId = parentId;
+    }
 
     try {
-        const parentTab = await chrome.tabs.get(parentId);
-        if (parentTab) {
-            await chrome.tabs.update(parentId, { active: true });
-            await chrome.windows.update(parentTab.windowId, { focused: true });
+        const targetTab = await chrome.tabs.get(nextTargetId);
+        if (targetTab) {
+            await chrome.tabs.update(nextTargetId, { active: true });
+            await chrome.windows.update(targetTab.windowId, { focused: true });
+            if (nextTargetId === parentId) {
+                chrome.tabs.sendMessage(parentId, {
+                    type: "SHOW_REDIRECT_NOTICE",
+                    canJumpBack: false,
+                    text: "Detour finished: returned to parent"
+                }).catch(() => {});
+            }
         }
     } catch {}
 
-    const toRemove = [...childrenToClose];
-    tabChildren.delete(parentId);
-
-    for (const childId of toRemove) {
-        try {
-            await chrome.tabs.remove(childId);
-        } catch {}
-    }
-
-    chrome.tabs.sendMessage(parentId, {
-        type: "SHOW_REDIRECT_NOTICE",
-        canJumpBack: false,
-        text: `Detour closed: cleaned up ${toRemove.length} tabs`
-    }).catch(() => {});
+    removeChildTab(currentTabId);
+    try {
+        await chrome.tabs.remove(currentTabId);
+    } catch {}
 }
 
-// Handle Alt+Z, Alt+X, Alt+G, Alt+Shift+G, Alt+Shift+E, Alt+Shift+R, and Alt+W command shortcuts
+async function reviveDeadChild() {
+    let currentTabId = currentActiveTabId;
+    if (!currentTabId) {
+        const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTab) currentTabId = activeTab.id;
+    }
+
+    if (deadChildren.length === 0) {
+        if (currentTabId) {
+            chrome.tabs.sendMessage(currentTabId, {
+                type: "SHOW_REDIRECT_NOTICE",
+                canJumpBack: false,
+                text: "No recently closed child tabs to revive"
+            }).catch(() => {});
+        }
+        return;
+    }
+
+    const dead = deadChildren.pop();
+    let parentAlive = false;
+
+    try {
+        await chrome.tabs.get(dead.parentId);
+        parentAlive = true;
+    } catch {
+        parentAlive = false;
+    }
+
+    const createProps = {
+        url: dead.url,
+        active: true
+    };
+
+    if (parentAlive) {
+        createProps.openerTabId = dead.parentId;
+        createProps.windowId = dead.windowId;
+        createProps.index = dead.index;
+    }
+
+    try {
+        const revivedTab = await chrome.tabs.create(createProps);
+        if (parentAlive) {
+            addChildTab(dead.parentId, revivedTab.id);
+        }
+        chrome.tabs.sendMessage(revivedTab.id, {
+            type: "SHOW_REDIRECT_NOTICE",
+            canJumpBack: false,
+            text: `Revived child: ${dead.title || "tab"}`
+        }).catch(() => {});
+    } catch {}
+}
+
+// Handle Alt+Z, Alt+X, Alt+G, and Alt+Shift+G command shortcuts
 chrome.commands.onCommand.addListener((command) => {
     if (command === "jump_back") {
         jumpBack();
@@ -361,12 +440,6 @@ chrome.commands.onCommand.addListener((command) => {
         jumpToChildTab("first");
     } else if (command === "jump_tree_latest" || command === "jump_first_child") {
         jumpToChildTab("latest");
-    } else if (command === "prev_child") {
-        stepSiblingChild(-1);
-    } else if (command === "next_child") {
-        stepSiblingChild(1);
-    } else if (command === "close_detour") {
-        closeDetour();
     }
 });
 

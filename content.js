@@ -146,7 +146,10 @@ document.addEventListener("keydown", (e) => {
 
     if (e.altKey && !e.shiftKey && e.code === "KeyW") {
         e.preventDefault();
-        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "close_detour" });
+        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "safe_kill" });
+    } else if (e.altKey && !e.shiftKey && e.code === "KeyQ") {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "revive_child" });
     }
 }, true);
 
