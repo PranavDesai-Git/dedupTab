@@ -104,5 +104,41 @@ document.addEventListener("auxclick", (e) => {
     }
 }, true);
 
+// Intercept regular left-clicks on links to prevent duplicate tabs
+document.addEventListener("click", (e) => {
+    if (e.button !== 0) return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+
+    const link = e.target.closest("a[href]");
+    if (!link) return;
+
+    const hrefAttr = link.getAttribute("href");
+    if (!hrefAttr || hrefAttr.startsWith("#") || hrefAttr.startsWith("javascript:")) return;
+    if (link.hasAttribute("download")) return;
+
+    const url = link.href;
+    if (!url || (!url.startsWith("http://") && !url.startsWith("https://"))) return;
+    if (url.startsWith(window.location.href + "#")) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const isNewTab = link.target === "_blank";
+
+    chrome.runtime.sendMessage(
+        { type: "CHECK_AND_SWITCH_TAB", url },
+        (response) => {
+            if (chrome.runtime.lastError || !response || !response.found) {
+                if (isNewTab) {
+                    window.open(url, "_blank");
+                } else {
+                    window.location.href = url;
+                }
+            }
+        }
+    );
+}, true);
+
+
 
 
