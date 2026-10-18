@@ -140,6 +140,23 @@ document.addEventListener("click", (e) => {
     );
 }, true);
 
+// Listen for in-page detour keyboard shortcuts
+document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.isContentEditable) return;
+
+    if (e.altKey && e.shiftKey && e.code === "KeyR") {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "next_child" });
+    } else if (e.altKey && e.shiftKey && e.code === "KeyE") {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "prev_child" });
+    } else if (e.altKey && !e.shiftKey && e.code === "KeyW") {
+        e.preventDefault();
+        chrome.runtime.sendMessage({ type: "EXEC_COMMAND", command: "close_detour" });
+    }
+}, true);
+
+
 
 
 

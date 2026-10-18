@@ -172,6 +172,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
     }
 
+    if (message.type === "EXEC_COMMAND" && message.command) {
+        if (message.command === "prev_child") {
+            stepSiblingChild(-1);
+        } else if (message.command === "next_child") {
+            stepSiblingChild(1);
+        } else if (message.command === "close_detour") {
+            closeDetour();
+        }
+        return;
+    }
+
     if (message.type === "CHECK_AND_SWITCH_TAB" && message.url) {
         const targetNormalized = normalizeUrl(message.url);
         const sourceTabId = sender.tab ? sender.tab.id : null;
