@@ -40,8 +40,19 @@ const backStack = [];
 const forwardStack = [];
 const tabChildren = new Map(); // parentTabId -> Array<childTabId>
 const deadChildren = []; // Array of { url, title, parentId, index, windowId }
+const tabMetadata = new Map(); // tabId -> { url, title, windowId, index }
 let currentActiveTabId = null;
 let isNavigatingHistory = false;
+
+function saveTabMetadata(tab) {
+    if (!tab || !tab.id) return;
+    tabMetadata.set(tab.id, {
+        url: tab.url || tab.pendingUrl || "",
+        title: tab.title || "",
+        windowId: tab.windowId,
+        index: tab.index
+    });
+}
 
 function addChildTab(parentId, childId) {
     if (!parentId || !childId || parentId === childId) return;
@@ -75,10 +86,14 @@ function getParentTabId(childId) {
     return null;
 }
 
-
-// Initialize active tab on service worker startup
-chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-    if (tabs && tabs[0]) currentActiveTabId = tabs[0].id;
+// Initialize active tab and tab metadata cache on service worker startup
+chrome.tabs.query({}, (tabs) => {
+    if (Array.isArray(tabs)) {
+        for (const tab of tabs) {
+            saveTabMetadata(tab);
+            if (tab.active) currentActiveTabId = tab.id;
+        }
+    }
 });
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
@@ -447,6 +462,7 @@ chrome.commands.onCommand.addListener((command) => {
 const pendingNewTabs = new Map();
 
 chrome.tabs.onCreated.addListener((tab) => {
+    saveTabMetadata(tab);
     pendingNewTabs.set(tab.id, Date.now());
     setTimeout(() => pendingNewTabs.delete(tab.id), 10000);
 
@@ -466,6 +482,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+    saveTabMetadata(tab);
     const url = changeInfo.url || (pendingNewTabs.has(tabId) && tab.url);
     if (!url || !pendingNewTabs.has(tabId)) return;
     if (!url.startsWith("http://") && !url.startsWith("https://")) return;
