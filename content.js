@@ -84,3 +84,11 @@ function showRedirectNotice(canJumpBack = false) {
     }, displayDuration);
 }
 
+// Listen for redirect notifications dispatched from background worker
+chrome.runtime.onMessage.addListener((message) => {
+    if (message && message.type === "SHOW_REDIRECT_NOTICE") {
+        showRedirectNotice(Boolean(message.canJumpBack));
+    }
+});
+
+
