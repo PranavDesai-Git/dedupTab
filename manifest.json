@@ -40,27 +40,6 @@
         "mac": "Alt+Shift+G"
       },
       "description": "Jump to top of tree (latest tab opened)"
-    },
-    "close_detour": {
-      "suggested_key": {
-        "default": "Alt+W",
-        "mac": "Alt+W"
-      },
-      "description": "Close all tabs in this detour and return to parent"
-    },
-    "prev_child": {
-      "suggested_key": {
-        "default": "Alt+Shift+E",
-        "mac": "Alt+Shift+E"
-      },
-      "description": "Go to previous sibling tab in detour"
-    },
-    "next_child": {
-      "suggested_key": {
-        "default": "Alt+Shift+R",
-        "mac": "Alt+Shift+R"
-      },
-      "description": "Go to next sibling tab in detour"
     }
   },
   "background": {
