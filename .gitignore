@@ -10,3 +10,7 @@ npm-debug.log*
 node_modules/
 dist/
 build/
+
+# Font cache
+scripts/*.ttf
+
