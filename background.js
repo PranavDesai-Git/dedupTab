@@ -296,7 +296,51 @@ async function stepSiblingChild(direction) {
     }
 }
 
-// Handle Alt+Z, Alt+X, Alt+G, Alt+Shift+G, Alt+Shift+E, and Alt+Shift+R command shortcuts
+async function closeDetour() {
+    let currentTabId = currentActiveTabId;
+    if (!currentTabId) {
+        const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+        if (activeTab) currentTabId = activeTab.id;
+    }
+    if (!currentTabId) return;
+
+    let parentId = getParentTabId(currentTabId);
+    let childrenToClose = [];
+
+    if (parentId) {
+        childrenToClose = tabChildren.get(parentId) || [];
+    } else {
+        parentId = currentTabId;
+        childrenToClose = tabChildren.get(currentTabId) || [];
+    }
+
+    if (childrenToClose.length === 0) return;
+
+    try {
+        const parentTab = await chrome.tabs.get(parentId);
+        if (parentTab) {
+            await chrome.tabs.update(parentId, { active: true });
+            await chrome.windows.update(parentTab.windowId, { focused: true });
+        }
+    } catch {}
+
+    const toRemove = [...childrenToClose];
+    tabChildren.delete(parentId);
+
+    for (const childId of toRemove) {
+        try {
+            await chrome.tabs.remove(childId);
+        } catch {}
+    }
+
+    chrome.tabs.sendMessage(parentId, {
+        type: "SHOW_REDIRECT_NOTICE",
+        canJumpBack: false,
+        text: `Detour closed: cleaned up ${toRemove.length} tabs`
+    }).catch(() => {});
+}
+
+// Handle Alt+Z, Alt+X, Alt+G, Alt+Shift+G, Alt+Shift+E, Alt+Shift+R, and Alt+W command shortcuts
 chrome.commands.onCommand.addListener((command) => {
     if (command === "jump_back") {
         jumpBack();
@@ -310,6 +354,8 @@ chrome.commands.onCommand.addListener((command) => {
         stepSiblingChild(-1);
     } else if (command === "next_child") {
         stepSiblingChild(1);
+    } else if (command === "close_detour") {
+        closeDetour();
     }
 });
 
