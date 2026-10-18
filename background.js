@@ -40,6 +40,7 @@ const backStack = [];
 const forwardStack = [];
 const tabChildren = new Map(); // parentTabId -> Array<childTabId>
 const deadChildren = []; // Array of { url, title, parentId, index, windowId }
+const deadBranches = []; // Array of { parent: metadata, children: [metadata] }
 const tabMetadata = new Map(); // tabId -> { url, title, windowId, index }
 let currentActiveTabId = null;
 let isNavigatingHistory = false;
@@ -474,7 +475,33 @@ chrome.tabs.onCreated.addListener((tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
     pendingNewTabs.delete(tabId);
+
+    // If this tab had alive children, cascade close them and save branch snapshot
+    if (tabChildren.has(tabId)) {
+        const children = tabChildren.get(tabId) || [];
+        if (children.length > 0) {
+            const parentMeta = tabMetadata.get(tabId) || { id: tabId };
+            const childrenMeta = [];
+            for (const childId of children) {
+                const chMeta = tabMetadata.get(childId);
+                if (chMeta) childrenMeta.push(chMeta);
+            }
+            deadBranches.push({
+                parent: parentMeta,
+                children: childrenMeta
+            });
+            if (deadBranches.length > 20) deadBranches.shift();
+
+            for (const childId of children) {
+                try {
+                    chrome.tabs.remove(childId);
+                } catch {}
+            }
+        }
+    }
+
     removeChildTab(tabId);
+    tabMetadata.delete(tabId);
     let idx;
     while ((idx = backStack.indexOf(tabId)) !== -1) backStack.splice(idx, 1);
     while ((idx = forwardStack.indexOf(tabId)) !== -1) forwardStack.splice(idx, 1);
