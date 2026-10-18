@@ -411,25 +411,8 @@ async function jumpToChildTab(position) {
     }
     if (!currentTabId) return;
 
-    let list = tabChildren.get(currentTabId);
-
-    // If current tab is a child tab without its own children, toggle back to parent tab
-    if (!list || list.length === 0) {
-        const parentId = getParentTabId(currentTabId);
-        if (parentId) {
-            try {
-                const parentTab = await chrome.tabs.get(parentId);
-                if (parentTab) {
-                    await chrome.tabs.update(parentId, { active: true });
-                    await chrome.windows.update(parentTab.windowId, { focused: true });
-                    return;
-                }
-            } catch {
-                removeChildTab(currentTabId);
-            }
-        }
-        return;
-    }
+    const list = tabChildren.get(currentTabId);
+    if (!list || list.length === 0) return;
 
     const candidateIds = position === "latest" ? [...list].reverse() : [...list];
 
@@ -690,20 +673,10 @@ chrome.commands.onCommand.addListener(async (command) => {
         jumpBack();
     } else if (command === "jump_forward") {
         jumpForward();
-    } else if (
-        command === "jump_tree_top" ||
-        command === "jump_tree_latest" ||
-        command === "jump_latest_child" ||
-        command === "jump_tree_first"
-    ) {
-        // Alt+G: Jump to top of tree (most recently opened child tab)
-        jumpToChildTab("latest");
-    } else if (
-        command === "jump_tree_bottom" ||
-        command === "jump_first_child"
-    ) {
-        // Alt+Shift+G: Jump to bottom of tree (first opened child tab)
+    } else if (command === "jump_tree_first" || command === "jump_latest_child") {
         jumpToChildTab("first");
+    } else if (command === "jump_tree_latest" || command === "jump_first_child") {
+        jumpToChildTab("latest");
     }
 });
 
